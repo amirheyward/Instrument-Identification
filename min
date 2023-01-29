@@ -1,0 +1,109 @@
+import numpy as np
+import random as rd
+import tensorflow as tf
+import tensorflow_io as tfio
+from tensorflow import keras
+from keras.models import Sequential
+from keras.layers import Activation, Dense, Flatten, BatchNormalization, Conv2D, MaxPooling2D, Dropout
+import pickle as pk
+from keras.datasets import mnist
+from keras.optimizers import Adam
+import matplotlib.pyplot as plt
+import warnings
+import 
+warnings.filterwarnings('ignore')
+
+
+import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+
+# Prevent system from running out of memory
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
+
+def preprocess(file_path):
+    wav = load_wav_16k_mono(file_path)
+    wav = wav[:48000]
+    # Padding for clips that are shorter than 3 sec
+    zero_padding = tf.zeros([48000] - tf.shape(wav), dtype=tf.float32)
+    wav = tf.concat([zero_padding, wav], 0)
+    spec = tf.signal.stft(wav, frame_length=320, frame_step=32)
+    spec = tf.abs(spec)
+    spec = tf.expand_dims(spec, axis=2)
+    spec = tf.math.log(spec + 1e-6)
+    return spec
+
+
+def load_wav_16k_mono(filename):
+    # Load encoded wav file
+    file_contents = tf.io.read_file(filename)
+    # Decode wav (tensors by channels) (converts to mono)
+    wav, sample_rate = tf.audio.decode_wav(file_contents, desired_channels=1)
+    # Removes trailing axis
+    wav = tf.squeeze(wav, axis=-1)
+    sample_rate = tf.cast(sample_rate, dtype=tf.int64)
+    # Goes from 44100Hz to 16000hz - amplitude of the audio signal (greatly condenses file size)
+    wav = tfio.audio.resample(wav, rate_in=sample_rate, rate_out=16000)
+    return wav
+
+
+instruments = ["cel", "cla", "flu", "gac", "gel", "org", "pia"]
+
+data = []
+for instrument in instruments:
+    path = os.path.join("Training Data", "IRMAS-TrainingData", instrument)
+    label_num = instruments.index(instrument)
+    count = 0
+    for file in os.listdir(path):
+        print(file)
+        spectrogram = preprocess(f"{path}/{file}")
+        print(spectrogram.shape)
+        data.append((spectrogram, label_num))
+        count += 1
+        if count == 20:
+            break
+
+# training data = first 40
+X = []
+y = []
+
+for features, label in data:
+    X.append(features)
+    y.append(label)
+X = np.array(X)
+
+model = Sequential()
+
+# set 1
+model.add(Conv2D(32, (3, 3), input_shape=(64, 64, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(.25))
+# set 2
+model.add(Conv2D(64, (3, 3), input_shape=(64, 64, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(.35))
+# set 3
+model.add(Conv2D(128, (3, 3), input_shape=(64, 64, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(.45))
+# set 4
+model.add(Conv2D(256, (3, 3), input_shape=(64, 64, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Flatten())
+model.add(Dropout(.50))
+# dense
+model.add(Dense(units=512, activation='relu'))
+model.add(Dropout(.75))
+model.add(Dense(units=7, activation='sigmoid'))
+
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.summary()
+
+# MODEL TRAINING
+hist = model.fit(X, y, epochs=4, validation_split=.3)
+
+# Data analysis
